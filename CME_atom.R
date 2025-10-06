@@ -39,16 +39,22 @@ pasta_saida  <- "C:\\Users\\Sacha\\OneDrive - Ministério da Saúde\\Documentos\
 ACCURACY_INC <- 0.1
 ACCURACY_PCT <- 0.1
 
+# Intervalo de datas "razoável" para filtrar (pode ajustar aqui)
 DATE_MIN_YEAR <- 2010
 DATE_MAX_YEAR <- as.integer(format(Sys.Date(), "%Y")) + 1
 
 # ============================
-# 1A) Mapeamento oficial de classi_fin
+# 1A) Mapeamento de classi_fin
 # ============================
-DENGUE_CODES <- c(10, 11, 12)  # 10=Dengue; 11=Dengue c/ sinais de alarme; 12=Dengue grave
-CHIK_CODES   <- 13             # 13=Chikungunya
-ZIKA_CODES   <- c(1, 2)        # 1=Zika (provável/confirmado), 2=Zika (confirmado) — manter conforme base
-DESC_CODE    <- 5              # 5=Descartado
+DENGUE_CODES <- c(10, 11, 12)  # Mantido apenas como referência (não é mais determinante)
+CHIK_CODES   <- 13             # 13 = Chikungunya
+ZIKA_CODES   <- c(1, 2)        # 1/2 = Zika (conforme base)
+DESC_CODE    <- 5              # 5 = Descartado
+
+is_prob_dengue <- function(cf){
+  cf <- suppressWarnings(as.integer(cf))
+  is.na(cf) || !(cf %in% c(DESC_CODE, CHIK_CODES))
+}
 
 # ============================
 # 2) Utilidades
@@ -212,27 +218,37 @@ dedup_mais_recente <- function(df){
 }
 
 # ============================
-# 2A) Detecção de agravo por linha
+# 2A) Detecção de agravo por linha (alinhada à regra de provável dengue)
 # ============================
-
 detectar_agravo <- function(df) {
-  cf <- suppressWarnings(as.integer(df$classi_fin))
+  n <- nrow(df)
+  out <- rep(NA_character_, n)
+  cf  <- suppressWarnings(as.integer(df$classi_fin))
   
-  # 1) mapear pelos códigos quando houver classi_fin
-  out <- ifelse(!is.na(cf) & cf %in% DENGUE_CODES, "dengue",
-                ifelse(!is.na(cf) & cf %in% CHIK_CODES,   "chik",
-                       ifelse(!is.na(cf) & cf %in% ZIKA_CODES,   "zika",
-                              NA_character_)))
+
+  if ("agravo" %in% names(df)) {
+    idx_dengue_base <- df$agravo == "dengue"
+    out[idx_dengue_base & is_prob_dengue(cf)] <- "dengue"
+    out[idx_dengue_base & !is_prob_dengue(cf)] <- "outro"
+  }
+  
+
+  idx_chik_code <- !is.na(cf) & cf %in% CHIK_CODES
+  out[idx_chik_code] <- "chik"
+  
+
+  idx_zika_code <- !is.na(cf) & cf %in% ZIKA_CODES
+  out[idx_zika_code] <- "zika"
+  
 
   if (!is.null(df$agravo)) {
-    out[is.na(out) & df$agravo == "dengue"] <- "dengue"
-    out[is.na(out) & df$agravo == "zika"]   <- "zika"
+    out[is.na(out) & df$agravo == "zika"] <- "zika"
+    out[is.na(out) & df$agravo == "chik" & idx_chik_code] <- "chik"
   }
-  out[is.na(out)] <- "outro"
   
+  out[is.na(out)] <- "outro"
   out
 }
-
 
 # ============================
 # 3) Leitura/padronização das bases
@@ -267,8 +283,8 @@ ler_e_padronizar <- function(path, agravo = c("dengue","chik","zika")){
   
   x <- adicionar_se_ano(x)
   
-  # agravo detectado por linha/origem
-  x$agravo <- agravo
+  # agravo da origem + agravo detectado
+  x$agravo     <- agravo
   x$agravo_det <- detectar_agravo(x)
   
   x
@@ -278,9 +294,8 @@ ler_e_padronizar <- function(path, agravo = c("dengue","chik","zika")){
 # 3A) Filtro de datas razoáveis + checagem de outliers
 # ============================
 filtrar_datas_raz <- function(df, ano_min = DATE_MIN_YEAR, ano_max = DATE_MAX_YEAR){
-  df %>% filter(is.na(data_evento) | dplyr::between(lubridate::year(data_evento), ano_min, ano_max))
+  df %>% dplyr::filter(is.na(data_evento) | dplyr::between(lubridate::year(data_evento), ano_min, ano_max))
 }
-
 
 log_range_datas <- function(df, label=""){
   rng <- range(df$data_evento, na.rm = TRUE)
@@ -291,7 +306,6 @@ log_range_datas <- function(df, label=""){
     scales::number(nrow(df), big.mark = ".", decimal.mark = ",")
   ))
 }
-
 
 # ============================
 # 4) População por UF
@@ -378,26 +392,25 @@ kpis_escopo <- function(dados24, dados25, se_ini, se_fim,
     d <- switch(escopo,
                 "brasil" = d,
                 "regiao" = d %>% dplyr::filter(regiao == nome),
-                "uf"     = d %>% dplyr::filter(uf == toupper(nome))
-    )
+                "uf"     = d %>% dplyr::filter(uf == toupper(nome)))
     d %>% dplyr::filter(dplyr::between(semana_epi, se_ini, se_fim))
   }
   
-  # 1) escopo + janela SE
+
   d24 <- filtra_escopo_e_se(dados24)
   d25 <- filtra_escopo_e_se(dados25)
   
-  # 2) descartar apenas DESC_CODE (5)
+
   if ("classi_fin" %in% names(d24)) d24 <- d24 %>% dplyr::filter(is.na(classi_fin) | classi_fin != DESC_CODE)
   if ("classi_fin" %in% names(d25)) d25 <- d25 %>% dplyr::filter(is.na(classi_fin) | classi_fin != DESC_CODE)
   
-  # 3) reforço por agravo (NA é mantido; p/ dengue, NA conta)
+
   alvo24 <- unique(dados24$agravo)[1]
   alvo25 <- unique(dados25$agravo)[1]
   
   if ("classi_fin" %in% names(d24)) {
     d24 <- switch(alvo24,
-                  "dengue" = d24 %>% dplyr::filter(is.na(classi_fin) | classi_fin %in% DENGUE_CODES),
+                  "dengue" = d24 %>% dplyr::filter(is.na(classi_fin) | !(classi_fin %in% CHIK_CODES)),
                   "chik"   = d24 %>% dplyr::filter(is.na(classi_fin) | classi_fin %in% CHIK_CODES),
                   "zika"   = if (length(ZIKA_CODES) > 0) d24 %>% dplyr::filter(is.na(classi_fin) | classi_fin %in% ZIKA_CODES) else d24,
                   d24
@@ -405,7 +418,7 @@ kpis_escopo <- function(dados24, dados25, se_ini, se_fim,
   }
   if ("classi_fin" %in% names(d25)) {
     d25 <- switch(alvo25,
-                  "dengue" = d25 %>% dplyr::filter(is.na(classi_fin) | classi_fin %in% DENGUE_CODES),
+                  "dengue" = d25 %>% dplyr::filter(is.na(classi_fin) | !(classi_fin %in% CHIK_CODES)),
                   "chik"   = d25 %>% dplyr::filter(is.na(classi_fin) | classi_fin %in% CHIK_CODES),
                   "zika"   = if (length(ZIKA_CODES) > 0) d25 %>% dplyr::filter(is.na(classi_fin) | classi_fin %in% ZIKA_CODES) else d25,
                   d25
@@ -454,7 +467,6 @@ kpis_escopo <- function(dados24, dados25, se_ini, se_fim,
     titulo              = sprintf("SITUAÇÃO EPIDEMIOLÓGICA SE %d – %d – %s %s", se_ini, se_fim, agrv, esc_txt)
   )
 }
-
 
 # ============================
 # 6) Helpers PPT
@@ -511,8 +523,8 @@ preencher_slide <- function(doc, valores, SE_NUM, SE2_NUM, DATA_TXT, layout, mas
 }
 
 montar_slide_por_escopo <- function(doc, agravo, escopo, nome, dados24, dados25, se_ini, se_fim, se_atual, data_base, layout, master, pop_uf){
-  d24  <- dados24 %>% filter(agravo == agravo)
-  d25  <- dados25 %>% filter(agravo == agravo)
+  d24  <- dados24 %>% dplyr::filter(agravo == agravo)
+  d25  <- dados25 %>% dplyr::filter(agravo == agravo)
   vals <- kpis_escopo(d24, d25, se_ini, se_fim, escopo = escopo, nome = nome, pop_uf = pop_uf)
   DATA_TXT <- paste0(" ", format(data_base, "%d.%m.%y"))
   preencher_slide(doc, valores = vals, SE_NUM = se_atual, SE2_NUM = se_atual, DATA_TXT = DATA_TXT, layout = layout, master = master)
@@ -531,15 +543,13 @@ chik_2024   <- ler_e_padronizar(ARQ_CHIK_2024,   "chik")
 zika_2025   <- ler_e_padronizar(ARQ_ZIKA_2025,   "zika")
 zika_2024   <- ler_e_padronizar(ARQ_ZIKA_2024,   "zika")
 
-
 cat("\n# Checagem de outliers de data (antes do filtro)\n")
-log_range_datas(dengue_2024 %>% filter(agravo=="dengue"), "DENGUE 2024")
-log_range_datas(dengue_2025 %>% filter(agravo=="dengue"), "DENGUE 2025")
-log_range_datas(chik_2024   %>% filter(agravo=="chik"),   "CHIK 2024")
-log_range_datas(chik_2025   %>% filter(agravo=="chik"),   "CHIK 2025")
-log_range_datas(zika_2024   %>% filter(agravo=="zika"),   "ZIKA 2024")
-log_range_datas(zika_2025   %>% filter(agravo=="zika"),   "ZIKA 2025")
-
+log_range_datas(dengue_2024 %>% dplyr::filter(agravo=="dengue"), "DENGUE 2024")
+log_range_datas(dengue_2025 %>% dplyr::filter(agravo=="dengue"), "DENGUE 2025")
+log_range_datas(chik_2024   %>% dplyr::filter(agravo=="chik"),   "CHIK 2024")
+log_range_datas(chik_2025   %>% dplyr::filter(agravo=="chik"),   "CHIK 2025")
+log_range_datas(zika_2024   %>% dplyr::filter(agravo=="zika"),   "ZIKA 2024")
+log_range_datas(zika_2025   %>% dplyr::filter(agravo=="zika"),   "ZIKA 2025")
 
 dengue_2024 <- filtrar_datas_raz(dengue_2024)
 dengue_2025 <- filtrar_datas_raz(dengue_2025)
@@ -548,14 +558,13 @@ chik_2025   <- filtrar_datas_raz(chik_2025)
 zika_2024   <- filtrar_datas_raz(zika_2024)
 zika_2025   <- filtrar_datas_raz(zika_2025)
 
-
 cat("\n# Checagem de outliers de data (depois do filtro)\n")
-log_range_datas(dengue_2024 %>% filter(agravo=="dengue"), "DENGUE 2024")
-log_range_datas(dengue_2025 %>% filter(agravo=="dengue"), "DENGUE 2025")
-log_range_datas(chik_2024   %>% filter(agravo=="chik"),   "CHIK 2024")
-log_range_datas(chik_2025   %>% filter(agravo=="chik"),   "CHIK 2025")
-log_range_datas(zika_2024   %>% filter(agravo=="zika"),   "ZIKA 2024")
-log_range_datas(zika_2025   %>% filter(agravo=="zika"),   "ZIKA 2025")
+log_range_datas(dengue_2024 %>% dplyr::filter(agravo=="dengue"), "DENGUE 2024")
+log_range_datas(dengue_2025 %>% dplyr::filter(agravo=="dengue"), "DENGUE 2025")
+log_range_datas(chik_2024   %>% dplyr::filter(agravo=="chik"),   "CHIK 2024")
+log_range_datas(chik_2025   %>% dplyr::filter(agravo=="chik"),   "CHIK 2025")
+log_range_datas(zika_2024   %>% dplyr::filter(agravo=="zika"),   "ZIKA 2024")
+log_range_datas(zika_2025   %>% dplyr::filter(agravo=="zika"),   "ZIKA 2025")
 
 pop_uf <- carregar_pop(POP_PATH)
 
