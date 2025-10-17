@@ -1,6 +1,4 @@
-# ============================
-# 0) Pacotes
-# ============================
+
 pkgs <- c("pacman")
 if (!all(pkgs %in% rownames(installed.packages()))) install.packages(setdiff(pkgs, rownames(installed.packages())))
 suppressWarnings(suppressMessages(library(pacman)))
@@ -25,14 +23,14 @@ ARQ_ZIKA_2024   <- "C:\\Relatorios DC e Nowcasting\\DC e Nowcasting_CSVs\\Zika\\
 POP_PATH        <- "C:\\Relatorios DC e Nowcasting\\DC e Nowcasting_CSVs\\Populacao\\pop_dc_18_25_uf.csv"
 
 incluir_brasil <- TRUE
-regioes_alvo   <- c("Nordeste")
-ufs_alvo       <- c("AL", "PE", "RN")
+regioes_alvo   <- c("Nordeste", "Sudeste")
+ufs_alvo       <- c("AL", "PE", "RN", "ES")
 POP_YEAR       <- 2025
 
 agravos        <- c("dengue","chik","zika")
 
 se_inicial  <- 27
-se_final    <- 40
+se_final    <- 41
 data_base   <- Sys.Date()
 
 pasta_saida  <- "C:\\Users\\Sacha\\OneDrive - Ministério da Saúde\\Documentos\\CME_automatizado\\"
@@ -56,9 +54,6 @@ is_prob_dengue <- function(cf){
   is.na(cf) || !(cf %in% c(DESC_CODE, CHIK_CODES))
 }
 
-# ============================
-# 2) Utilidades
-# ============================
 log_msg <- function(...) message(sprintf("[%s] %s", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), paste(..., collapse=" ")))
 
 safe_read <- function(path){
@@ -289,10 +284,6 @@ ler_e_padronizar <- function(path, agravo = c("dengue","chik","zika")){
   
   x
 }
-
-# ============================
-# 3A) Filtro de datas razoáveis + checagem de outliers
-# ============================
 filtrar_datas_raz <- function(df, ano_min = DATE_MIN_YEAR, ano_max = DATE_MAX_YEAR){
   df %>% dplyr::filter(is.na(data_evento) | dplyr::between(lubridate::year(data_evento), ano_min, ano_max))
 }
